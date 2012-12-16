@@ -1,0 +1,8 @@
+Manifest-Version: 1.0
+Bundle-Vendor: The Android Open Source Project
+Bundle-Version: %%VERSION%%
+Bundle-Name: Android Sources
+Bundle-ManifestVersion: 2
+Bundle-SymbolicName: com.android.ide.eclipse.source;singleton:=true
+
+

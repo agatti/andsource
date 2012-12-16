@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<site>
+   <feature url="features/com.android.ide.eclipse.source_%%VERSION%%.jar" id="com.android.ide.eclipse.source" version="%%VERSION%%">
+      <category name="com.android.ide.eclipse.source"/>
+   </feature>
+   <category-def name="com.android.ide.eclipse.source" label="Android Sources"/>
+</site>
