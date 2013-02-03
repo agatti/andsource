@@ -1,14 +1,16 @@
 #!/usr/bin/env python
 
-# Copyright (c) 2012 Alessandro Gatti
+# Copyright (c) 2012-2013 Alessandro Gatti
 #
 # This program is licensed under the Eclipse Public License - v 1.0
 # You can read the full licence text at
 # http://www.eclipse.org/org/documents/epl-v10.html
 
 import argparse
+import concurrent.futures
 import datetime
 import logging
+import multiprocessing
 import os
 import shutil
 import stat
@@ -28,6 +30,10 @@ def parse_arguments():  # {{{
                         help='Create a ZIP package instead of a site')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Do not print any message')
+    parser.add_argument('--threads', '-t', metavar='THREADS_COUNT',
+                        type=int, action='store',
+                        help='Concurrent threads to use (defaults to %d)' \
+                        % multiprocessing.cpu_count())
     parser.add_argument('sdk_base', metavar='ANDROID_SDK_DIRECTORY',
                         type=str, nargs=1, help='Android SDK directory')
     parser.add_argument('target', metavar='TARGET_LOCATION',
@@ -60,7 +66,7 @@ def split_property_line(line):  # {{{
     for character in line:
         if hex_code:
             if len(hex_string) == 4:
-                current_line += unicode(int(hex_string, 16))
+                current_line += str(int(hex_string, 16))
                 hex_code = False
                 hex_string = ''
             else:
@@ -164,6 +170,7 @@ def collect_android_sources(base_directory):  # {{{
 
 def package_sdk_source(directory, target_file):  # {{{
     root_directory = os.path.abspath(directory)
+
     with zipfile.ZipFile(target_file, 'w', zipfile.ZIP_DEFLATED) as output:
         for root, directories, files in os.walk(directory):
             for directory_name in directories:
@@ -200,7 +207,7 @@ def preprocess(source_file, variables):  # {{{
 
 
 def create_target(target_directory, force):  # {{{
-    if force:
+    if force and os.path.exists(target_directory):
         logging.info('Removing %s', target_directory)
         shutil.rmtree(target_directory)
 
@@ -220,7 +227,7 @@ def generate_site(base, target, variables):  # {{{
 
     with open(os.path.join(target, 'site.xml'), 'wb+') as output:
         path = os.path.join(base, 'assets', 'site.xml')
-        output.write(preprocess(path, variables))
+        output.write(bytes(preprocess(path, variables), 'UTF-8'))
 # }}}
 
 
@@ -256,19 +263,26 @@ def generate_features(base, target, variables):  # {{{
 # }}}
 
 
-def generate_plugins(base, target, variables, sdks):  # {{{
+def generate_plugins(base, target, variables, sdks, threads):  # {{{
     logging.info('Generating plugins jar')
 
     sdk_archives = {}
 
-    for sdk in sdks:
-        sdk_archives[sdk] = tempfile.NamedTemporaryFile(delete=False)
-        package_sdk_source(sdks[sdk], sdk_archives[sdk])
-        sdk_archives[sdk].close()
+    def asynchronous_packer(api_level, path):
+        with tempfile.NamedTemporaryFile(delete=False) as temporary:
+            package_sdk_source(path, temporary)
+            logging.info('Packaged SDK %s with filename %s', api_level,
+                         temporary.name)
+            sdk_archives[api_level] = temporary
 
-        logging.info('Packaged SDK %s with filename %s', str(sdk),
-                     sdk_archives[sdk].name)
+    packing_threads = []
 
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=threads) as executor:
+        packing_threads = [executor.submit(asynchronous_packer,
+                                           sdk, sdks[sdk])
+                           for sdk in sdks]
+  
     output_file_name = os.path.join(target, 'plugins',
                                     'com.android.ide.eclipse.source_' +
                                     variables['VERSION'] + '.jar')
@@ -292,6 +306,8 @@ def generate_plugins(base, target, variables, sdks):  # {{{
         output.write(os.path.join(assets, icon_name),
                      os.path.join('icons', icon_name),
                      zipfile.ZIP_DEFLATED)
+
+        concurrent.futures.wait(packing_threads)
 
         for sdk in sorted(sdks):
             logging.debug('Packing SDK %s', str(sdk))
@@ -336,14 +352,19 @@ def repack(directory, target_file):  # {{{
 def main():  # {{{
     if ARGUMENTS.quiet:
         level = logging.CRITICAL
-    elif ARGUMENTS.verbose == 1:
+    elif ARGUMENTS.verbose is not None and ARGUMENTS.verbose == 1:
         level = logging.WARNING
-    elif ARGUMENTS.verbose == 2:
+    elif ARGUMENTS.verbose is not None and ARGUMENTS.verbose == 2:
         level = logging.INFO
-    elif (ARGUMENTS.verbose == 3) or (ARGUMENTS.verbose > 3):
+    elif ARGUMENTS.verbose is not None and ARGUMENTS.verbose >= 3:
         level = logging.DEBUG
     else:
         level = logging.ERROR
+
+    if not ARGUMENTS.threads:
+        threads = multiprocessing.cpu_count()
+    else:
+        threads = ARGUMENTS.threads
 
     logging.basicConfig(format='%(levelname)s:%(message)s', level=level)
 
@@ -362,7 +383,8 @@ def main():  # {{{
     generate_site(ASSETS, target, VARS)
     generate_content(ASSETS, target, VARS)
     VARS['FEATURES_SIZE'] = generate_features(ASSETS, target, VARS)
-    VARS['PLUGINS_SIZE'] = generate_plugins(ASSETS, target, VARS, sdks)
+    VARS['PLUGINS_SIZE'] = generate_plugins(ASSETS, target, VARS, sdks,
+                                            threads)
     generate_artifacts(ASSETS, target, VARS)
 
     if ARGUMENTS.zip:
