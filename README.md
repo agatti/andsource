@@ -1,3 +1,10 @@
+#OBSOLETE, ABANDONED, DEPRECATED, ETC.
+
+If you are still using Eclipse for Android development, it is probably
+time to migrate to Android Studio.
+
+Original README file contents follow:
+
 Android Sources Eclipse site generator
 ======================================
 
